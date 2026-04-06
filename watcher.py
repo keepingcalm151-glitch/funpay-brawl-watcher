@@ -118,7 +118,38 @@ class Offer:
     seller_name: str       # ник продавца
 
 
-# ===== 5. Основные шаги поиска выгодных офферов (заглушки) =====
+# ===== 5. Парсинг страницы оффера: бойцы =====
+
+def extract_heroes_from_offer_html(html: str) -> Optional[int]:
+    """
+    Пытаемся вытащить количество бойцов из страницы конкретного оффера.
+    На странице есть блоки вида:
+      "👤 Бойцов: 14<br />"
+    или просто "Бойцов: 14".
+
+    Берём первое найденное число после слова "Бойцов".
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    text = soup.get_text(" ", strip=True)
+
+    # Ищем "Бойцов:" или "Бравлеров:" и берём ближайшее число
+    import re
+
+    patterns = [
+        r"[Бб]ойцов[:\s]+(\d+)",
+        r"[Бб]равлеров[:\s]+(\d+)",
+    ]
+
+    for pattern in patterns:
+        m = re.search(pattern, text)
+        if m:
+            try:
+                return int(m.group(1))
+            except ValueError:
+                continue
+
+    return None
+
 
 def collect_offers(state: dict) -> List[Offer]:
     """
@@ -144,13 +175,14 @@ def collect_offers(state: dict) -> List[Offer]:
       - data-s (цена в рублях)
       - краткое описание (div.tc-desc-text)
       - ник продавца (div.media-user-name)
+
+    Если heroes в data-f-hero нет, пытаемся достать его со страницы оффера.
     """
     html = fetch_page(BRAWL_ACCOUNTS_URL)
     soup = BeautifulSoup(html, "html.parser")
 
     offers: List[Offer] = []
 
-    # все <a class="tc-item ...">
     for a in soup.find_all("a", class_="tc-item"):
         href = a.get("href")
         if not href:
@@ -165,24 +197,19 @@ def collect_offers(state: dict) -> List[Offer]:
         # ID оффера из параметра ?id=...
         offer_id = None
         if "offer?id=" in offer_url:
-            # простое вытаскивание числа после offer?id=
             part = offer_url.split("offer?id=", 1)[-1]
-            # режем по & если есть ещё параметры
             part = part.split("&", 1)[0]
             offer_id = part.strip()
         if not offer_id:
-            # непонятная ссылка — пропускаем
             continue
 
-        # Цена из <div class="tc-price" data-s="...">
+        # Цена
         price_div = a.find("div", class_="tc-price")
         if not price_div:
             continue
         data_s = price_div.get("data-s")
         if not data_s:
-            # иногда может не быть data-s, пробуем из текста
             text = price_div.get_text(" ", strip=True).replace(",", ".")
-            # ищем число
             price_val = None
             for tok in text.split():
                 try:
@@ -198,13 +225,22 @@ def collect_offers(state: dict) -> List[Offer]:
             except ValueError:
                 continue
 
-        # Кол-во бойцов из data-f-hero, если атрибут есть
+        # Кол-во бойцов: сначала пытаемся взять из data-f-hero
         heroes_raw = a.get("data-f-hero")
         heroes_count: Optional[int] = None
         if heroes_raw:
             try:
                 heroes_count = int(heroes_raw)
             except ValueError:
+                heroes_count = None
+
+        # Если heroes_count всё ещё None — пытаемся вытащить со страницы оффера
+        if heroes_count is None:
+            try:
+                offer_html = fetch_page(offer_url)
+                heroes_count = extract_heroes_from_offer_html(offer_html)
+            except Exception as e:
+                print(f"[WARN] Не удалось получить heroes для оффера {offer_id}: {e}")
                 heroes_count = None
 
         # Краткое описание
@@ -234,14 +270,109 @@ def collect_offers(state: dict) -> List[Offer]:
     return offers
 
 
+# ===== 6. Выгодность по бойцам и цене =====
+
+def get_price_range_for_heroes(heroes: int) -> Optional[tuple[float, float]]:
+    """
+    Возвращает (min_price, max_price) для заданного количества бойцов.
+    Диапазоны по ТЗ:
+
+      70–79    -> 100–300
+      80–84    -> 100–420
+      85–89    -> 100–450
+      90–94    -> 100–650
+      95–99    -> 100–700
+      >= 100   -> 100–1000
+
+    Если heroes < 70 — возвращаем None (оффер нами не интересен).
+    """
+    if 70 <= heroes <= 79:
+        return 100.0, 300.0
+    if 80 <= heroes <= 84:
+        return 100.0, 420.0
+    if 85 <= heroes <= 89:
+        return 100.0, 450.0
+    if 90 <= heroes <= 94:
+        return 100.0, 650.0
+    if 95 <= heroes <= 99:
+        return 100.0, 700.0
+    if heroes >= 100:
+        return 100.0, 1000.0
+    return None
+
+
+def calculate_value_label(price: float, price_min: float, price_max: float) -> Optional[str]:
+    """
+    Считаем "процент цены" внутри диапазона:
+      100 руб = 30%
+      max     = 100%
+
+    Линейно растягиваем:
+      t = (price - price_min) / (price_max - price_min)
+      percent = 30 + t * (100 - 30)
+
+    Метки:
+      percent <= 50 -> "Блестящая"
+      percent <= 70 -> "Средняя"
+      иначе         -> None
+    """
+    if price <= 0 or price_max <= price_min:
+        return None
+
+    t = (price - price_min) / (price_max - price_min)
+    # зажимаем 0..1 на всякий случай
+    t = max(0.0, min(1.0, t))
+    percent = 30.0 + t * (100.0 - 30.0)
+
+    if percent <= 50.0:
+        return "Блестящая"
+    if percent <= 70.0:
+        return "Средняя"
+    return None
+
+
 def filter_profitable_offers(offers: List[Offer]) -> List[Offer]:
     """
-    Здесь будет логика фильтрации по количеству бойцов и цене,
-    плюс расчёт метки выгодности.
-    Пока заглушка.
+    Фильтрация офферов по количеству бойцов и цене, с расчётом метки выгодности.
+
+    Логика:
+      - если heroes отсутствует или < 70 — оффер не рассматриваем;
+      - по heroes выбираем ценовой диапазон (min, max);
+      - если price_rub > max — оффер неинтересен;
+      - считаем "процент цены" и метку:
+            <= 50% -> "Блестящая"
+            <= 70% -> "Средняя"
+            > 70%  -> метки нет (но оффер всё равно может пройти, если цена <= max);
+      - список отфильтрованных офферов возвращаем.
     """
-    print("[INFO] filter_profitable_offers() пока не реализован, возвращаем пустой список.")
-    return []
+    profitable: List[Offer] = []
+
+    for offer in offers:
+        if offer.heroes is None:
+            continue
+        heroes = offer.heroes
+        price = offer.price_rub
+
+        rng = get_price_range_for_heroes(heroes)
+        if rng is None:
+            continue
+        price_min, price_max = rng
+
+        if price > price_max:
+            continue
+
+        label = calculate_value_label(price, price_min, price_max)
+
+        # Метку выгодности сохраним в state через поле offer_id -> label,
+        # а в send_new_offers_to_telegram будем её подставлять в текст
+        offer_value_labels = STATE.get("offer_value_labels", {}) if "STATE" in globals() else {}
+        offer_value_labels[offer.offer_id] = label
+        if "STATE" in globals():
+            STATE["offer_value_labels"] = offer_value_labels
+
+        profitable.append(offer)
+
+    return profitable
 
 
 def send_new_offers_to_telegram(offers: List[Offer], state: dict) -> None:
@@ -260,16 +391,33 @@ def send_new_offers_to_telegram(offers: List[Offer], state: dict) -> None:
         if sent_offers.get(offer.offer_id):
             continue
 
-        text_lines = [
-            "Найден аккаунт:",
-            f"Бойцов: {offer.heroes if offer.heroes is not None else 'неизвестно'}",
-            f"Стоимость: {offer.price_rub:.2f} ₽",
-            f"Ссылка: {offer.url}",
+        heroes = offer.heroes if offer.heroes is not None else "неизвестно"
+        price = offer.price_rub
+
+        label_text = ""
+        if isinstance(heroes, int):
+            rng = get_price_range_for_heroes(heroes)
+            if rng is not None:
+                price_min, price_max = rng
+                label = calculate_value_label(price, price_min, price_max)
+                if label:
+                    label_text = label
+
+        # Формат сообщения:
+        # Найден аккаунт: Бойцов, Стоимость, Метка выгодности (если есть), Ссылка
+        parts = [
+            f"Найден аккаунт:",
+            f"Бойцов: {heroes}",
+            f"Стоимость: {price:.2f} ₽",
         ]
-        text = "\n".join(text_lines)
+        if label_text:
+            parts.append(f"Метка выгодности: {label_text}")
+        parts.append(f"Ссылка: {offer.url}")
+
+        text = "\n".join(parts)
 
         try:
-            print(f"[INFO] Отправляем оффер {offer.offer_id} ({offer.price_rub:.2f} ₽, {offer.heroes} бойцов)")
+            print(f"[INFO] Отправляем оффер {offer.offer_id} ({price:.2f} ₽, {heroes} бойцов, метка: {label_text or 'нет'})")
             send_telegram_message(text)
             sent_offers[offer.offer_id] = True
             save_state(state)
