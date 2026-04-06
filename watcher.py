@@ -122,13 +122,116 @@ class Offer:
 
 def collect_offers(state: dict) -> List[Offer]:
     """
-    Здесь будет:
-      - загрузка страницы с аккаунтами Brawl Stars
-      - парсинг HTML и сбор списка Offer
-    Пока заглушка.
+    Загружаем страницу со всеми аккаунтами Brawl Stars и парсим офферы.
+
+    Ищем элементы вида:
+      <a href="https://funpay.com/lots/offer?id=66881057"
+         class="tc-item lazyload-hidden"
+         data-online="1"
+         data-auto="1"
+         data-f-cup="1056"
+         data-f-hero="14">
+
+      ...
+
+      <div class="tc-price" data-s="157.535642">
+          <div>157.54 <span class="unit">₽</span></div>
+      </div>
+
+    Нас интересуют:
+      - href (ссылка на оффер)
+      - data-f-hero (кол-во бойцов, если есть)
+      - data-s (цена в рублях)
+      - краткое описание (div.tc-desc-text)
+      - ник продавца (div.media-user-name)
     """
-    print("[INFO] collect_offers() пока не реализован, возвращаем пустой список.")
-    return []
+    html = fetch_page(BRAWL_ACCOUNTS_URL)
+    soup = BeautifulSoup(html, "html.parser")
+
+    offers: List[Offer] = []
+
+    # все <a class="tc-item ...">
+    for a in soup.find_all("a", class_="tc-item"):
+        href = a.get("href")
+        if not href:
+            continue
+
+        # Полный URL оффера
+        if href.startswith("http"):
+            offer_url = href
+        else:
+            offer_url = BASE_URL.rstrip("/") + "/" + href.lstrip("/")
+
+        # ID оффера из параметра ?id=...
+        offer_id = None
+        if "offer?id=" in offer_url:
+            # простое вытаскивание числа после offer?id=
+            part = offer_url.split("offer?id=", 1)[-1]
+            # режем по & если есть ещё параметры
+            part = part.split("&", 1)[0]
+            offer_id = part.strip()
+        if not offer_id:
+            # непонятная ссылка — пропускаем
+            continue
+
+        # Цена из <div class="tc-price" data-s="...">
+        price_div = a.find("div", class_="tc-price")
+        if not price_div:
+            continue
+        data_s = price_div.get("data-s")
+        if not data_s:
+            # иногда может не быть data-s, пробуем из текста
+            text = price_div.get_text(" ", strip=True).replace(",", ".")
+            # ищем число
+            price_val = None
+            for tok in text.split():
+                try:
+                    price_val = float(tok)
+                    break
+                except ValueError:
+                    continue
+            if price_val is None:
+                continue
+        else:
+            try:
+                price_val = float(data_s.replace(",", "."))
+            except ValueError:
+                continue
+
+        # Кол-во бойцов из data-f-hero, если атрибут есть
+        heroes_raw = a.get("data-f-hero")
+        heroes_count: Optional[int] = None
+        if heroes_raw:
+            try:
+                heroes_count = int(heroes_raw)
+            except ValueError:
+                heroes_count = None
+
+        # Краткое описание
+        desc_div = a.find("div", class_="tc-desc-text")
+        if desc_div:
+            title = desc_div.get_text(" ", strip=True)
+        else:
+            title = ""
+
+        # Ник продавца
+        seller_name = ""
+        seller_div = a.find("div", class_="media-user-name")
+        if seller_div:
+            seller_name = seller_div.get_text(" ", strip=True)
+
+        offer = Offer(
+            offer_id=offer_id,
+            url=offer_url,
+            price_rub=price_val,
+            heroes=heroes_count,
+            title=title,
+            seller_name=seller_name,
+        )
+        offers.append(offer)
+
+    print(f"[INFO] На странице Brawl Stars найдено офферов: {len(offers)}")
+    return offers
 
 
 def filter_profitable_offers(offers: List[Offer]) -> List[Offer]:
