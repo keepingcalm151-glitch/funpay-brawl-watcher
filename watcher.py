@@ -333,42 +333,32 @@ def calculate_value_label(price: float, price_min: float, price_max: float) -> O
 
 def filter_profitable_offers(offers: List[Offer]) -> List[Offer]:
     """
-    Фильтрация офферов по количеству бойцов и цене, с расчётом метки выгодности.
+    Фильтрация офферов по количеству бойцов и цене.
 
     Логика:
       - если heroes отсутствует или < 70 — оффер не рассматриваем;
       - по heroes выбираем ценовой диапазон (min, max);
-      - если price_rub > max — оффер неинтересен;
-      - считаем "процент цены" и метку:
-            <= 50% -> "Блестящая"
-            <= 70% -> "Средняя"
-            > 70%  -> метки нет (но оффер всё равно может пройти, если цена <= max);
-      - список отфильтрованных офферов возвращаем.
+      - если price_rub < min или price_rub > max — оффер неинтересен;
+      - иначе оффер считается подходящим, дальше метку выгодности посчитаем при отправке.
     """
     profitable: List[Offer] = []
 
     for offer in offers:
         if offer.heroes is None:
             continue
+
         heroes = offer.heroes
         price = offer.price_rub
 
         rng = get_price_range_for_heroes(heroes)
         if rng is None:
             continue
+
         price_min, price_max = rng
 
-        if price > price_max:
+        # отсекаем и слишком дешёвые (меньше 100), и слишком дорогие
+        if price < price_min or price > price_max:
             continue
-
-        label = calculate_value_label(price, price_min, price_max)
-
-        # Метку выгодности сохраним в state через поле offer_id -> label,
-        # а в send_new_offers_to_telegram будем её подставлять в текст
-        offer_value_labels = STATE.get("offer_value_labels", {}) if "STATE" in globals() else {}
-        offer_value_labels[offer.offer_id] = label
-        if "STATE" in globals():
-            STATE["offer_value_labels"] = offer_value_labels
 
         profitable.append(offer)
 
