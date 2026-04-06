@@ -3,7 +3,7 @@
 # Воркер для Railway:
 #   Procfile: worker: python watcher.py
 #
-# Логика (в общих чертах, детали добавим позже):
+# Логика:
 #   - каждые N минут заходим на страницу аккаунтов Brawl Stars на FunPay
 #   - парсим список офферов (ссылки, цена, количество бойцов)
 #   - при необходимости заходим в конкретный оффер, чтобы уточнить кол-во бойцов
@@ -47,7 +47,7 @@ MAX_SIGNALS_PER_DAY: int = int(config.get("max_signals_per_day", 100))
 
 def load_state() -> dict:
     """
-    Загружаем state.json (память о уже отправленных офферах).
+    Загружаем state.json (память о уже отправленных/просмотренных офферах).
     Если файла нет или он битый – возвращаем пустой dict.
     """
     if not os.path.exists(STATE_PATH):
@@ -106,7 +106,7 @@ def send_telegram_message(text: str) -> None:
     resp.raise_for_status()
 
 
-# ===== 4. Структуры данных (заполним позже) =====
+# ===== 4. Структуры данных =====
 
 @dataclass
 class Offer:
@@ -125,14 +125,13 @@ def extract_heroes_from_offer_html(html: str) -> Optional[int]:
     Пытаемся вытащить количество бойцов из страницы конкретного оффера.
     На странице есть блоки вида:
       "👤 Бойцов: 14<br />"
-    или просто "Бойцов: 14".
+    или просто "Бойцов: 14" / "Бравлеров: 14".
 
-    Берём первое найденное число после слова "Бойцов".
+    Берём первое найденное число после слов "Бойцов" или "Бравлеров".
     """
     soup = BeautifulSoup(html, "html.parser")
     text = soup.get_text(" ", strip=True)
 
-    # Ищем "Бойцов:" или "Бравлеров:" и берём ближайшее число
     import re
 
     patterns = [
@@ -150,6 +149,8 @@ def extract_heroes_from_offer_html(html: str) -> Optional[int]:
 
     return None
 
+
+# ===== 6. Сбор офферов (с пропуском уже просмотренных) =====
 
 def collect_offers(state: dict) -> List[Offer]:
     """
@@ -177,11 +178,15 @@ def collect_offers(state: dict) -> List[Offer]:
       - ник продавца (div.media-user-name)
 
     Если heroes в data-f-hero нет, пытаемся достать его со страницы оффера.
+    Также пропускаем офферы, которые уже были просмотрены ранее (seen_offers).
     """
     html = fetch_page(BRAWL_ACCOUNTS_URL)
     soup = BeautifulSoup(html, "html.parser")
 
     offers: List[Offer] = []
+
+    # список уже просмотренных офферов
+    seen_offers: Dict[str, bool] = state.setdefault("seen_offers", {})
 
     for a in soup.find_all("a", class_="tc-item"):
         href = a.get("href")
@@ -201,6 +206,10 @@ def collect_offers(state: dict) -> List[Offer]:
             part = part.split("&", 1)[0]
             offer_id = part.strip()
         if not offer_id:
+            continue
+
+        # если этот оффер мы уже видели в прошлых итерациях — пропускаем сразу
+        if seen_offers.get(offer_id):
             continue
 
         # Цена
@@ -266,11 +275,17 @@ def collect_offers(state: dict) -> List[Offer]:
         )
         offers.append(offer)
 
-    print(f"[INFO] На странице Brawl Stars найдено офферов: {len(offers)}")
+        # помечаем оффер как "просмотренный", чтобы в следующих итерациях его не трогать
+        seen_offers[offer_id] = True
+
+    # сохраняем обновлённое состояние
+    save_state(state)
+
+    print(f"[INFO] На странице Brawl Stars найдено офферов (новых): {len(offers)}")
     return offers
 
 
-# ===== 6. Выгодность по бойцам и цене =====
+# ===== 7. Выгодность по бойцам и цене =====
 
 def get_price_range_for_heroes(heroes: int) -> Optional[tuple[float, float]]:
     """
@@ -320,7 +335,6 @@ def calculate_value_label(price: float, price_min: float, price_max: float) -> O
         return None
 
     t = (price - price_min) / (price_max - price_min)
-    # зажимаем 0..1 на всякий случай
     t = max(0.0, min(1.0, t))
     percent = 30.0 + t * (100.0 - 30.0)
 
@@ -356,7 +370,6 @@ def filter_profitable_offers(offers: List[Offer]) -> List[Offer]:
 
         price_min, price_max = rng
 
-        # отсекаем и слишком дешёвые (меньше 100), и слишком дорогие
         if price < price_min or price > price_max:
             continue
 
@@ -364,6 +377,8 @@ def filter_profitable_offers(offers: List[Offer]) -> List[Offer]:
 
     return profitable
 
+
+# ===== 8. Отправка выгодных офферов в Telegram =====
 
 def send_new_offers_to_telegram(offers: List[Offer], state: dict) -> None:
     """
@@ -393,10 +408,8 @@ def send_new_offers_to_telegram(offers: List[Offer], state: dict) -> None:
                 if label:
                     label_text = label
 
-        # Формат сообщения:
-        # Найден аккаунт: Бойцов, Стоимость, Метка выгодности (если есть), Ссылка
         parts = [
-            f"Найден аккаунт:",
+            "Найден аккаунт:",
             f"Бойцов: {heroes}",
             f"Стоимость: {price:.2f} ₽",
         ]
@@ -407,7 +420,10 @@ def send_new_offers_to_telegram(offers: List[Offer], state: dict) -> None:
         text = "\n".join(parts)
 
         try:
-            print(f"[INFO] Отправляем оффер {offer.offer_id} ({price:.2f} ₽, {heroes} бойцов, метка: {label_text or 'нет'})")
+            print(
+                f"[INFO] Отправляем оффер {offer.offer_id} "
+                f"({price:.2f} ₽, {heroes} бойцов, метка: {label_text or 'нет'})"
+            )
             send_telegram_message(text)
             sent_offers[offer.offer_id] = True
             save_state(state)
@@ -419,11 +435,13 @@ def send_new_offers_to_telegram(offers: List[Offer], state: dict) -> None:
             print(f"[ERROR] Не удалось отправить сообщение в Telegram: {e}")
 
 
+# ===== 9. Основной цикл =====
+
 def run_single_iteration() -> None:
     """
     Одна полная итерация:
       - загрузить состояние
-      - собрать офферы
+      - собрать офферы (только новые)
       - отфильтровать выгодные
       - отправить в Telegram
     """
@@ -433,7 +451,7 @@ def run_single_iteration() -> None:
     state = load_state()
 
     offers = collect_offers(state)
-    print(f"[INFO] Собрано офферов: {len(offers)}")
+    print(f"[INFO] Собрано офферов (новых): {len(offers)}")
 
     profitable = filter_profitable_offers(offers)
     print(f"[INFO] Найдено выгодных офферов: {len(profitable)}")
