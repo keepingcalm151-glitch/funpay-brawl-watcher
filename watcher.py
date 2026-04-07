@@ -481,11 +481,11 @@ def main_loop() -> None:
     except (TypeError, ValueError):
         interval_minutes = 1.0  # дефолт 1 минута
 
-    # минимальный разумный интервал — 10 секунд (0.1667 минуты)
+    # минимальный разумный интервал — 29 секунд (0.3000 минуты)
     if interval_minutes <= 0:
         interval_minutes = 1.0
-    elif interval_minutes < 0.1667:
-        interval_minutes = 0.1667
+    elif interval_minutes < 0.3000:
+        interval_minutes = 0.3000
 
     interval_sec = int(interval_minutes * 60)
 
