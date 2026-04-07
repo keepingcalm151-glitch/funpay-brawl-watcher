@@ -351,11 +351,14 @@ def filter_profitable_offers(offers: List[Offer]) -> List[Offer]:
 
     Логика:
       - если heroes отсутствует или < 70 — оффер не рассматриваем;
-      - по heroes выбираем ценовой диапазон (min, max);
-      - если price_rub < min или price_rub > max — оффер неинтересен;
-      - иначе оффер считается подходящим, дальше метку выгодности посчитаем при отправке.
+      - по heroes выбираем базовый ценовой диапазон (min, max);
+      - жёсткий нижний порог: price_rub >= min;
+      - мягкий верхний порог: price_rub <= max + 40;
+      - иначе оффер неинтересен.
     """
     profitable: List[Offer] = []
+
+    EXTRA_ABOVE_MAX = 40.0  # сколько рублей допускаем выше верхней границы
 
     for offer in offers:
         if offer.heroes is None:
@@ -369,8 +372,10 @@ def filter_profitable_offers(offers: List[Offer]) -> List[Offer]:
             continue
 
         price_min, price_max = rng
+        soft_max = price_max + EXTRA_ABOVE_MAX
 
-        if price < price_min or price > price_max:
+        # отсекаем слишком дешёвые и слишком дорогие
+        if price < price_min or price > soft_max:
             continue
 
         profitable.append(offer)
