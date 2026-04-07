@@ -465,16 +465,36 @@ def run_single_iteration() -> None:
 def main_loop() -> None:
     """
     Бесконечный цикл для Railway.
+    Нормализуем интервал:
+      - если из конфига пришёл мусор или слишком маленькое число,
+        ставим безопасное значение по умолчанию.
+    Логируем интервал в секундах, чтобы не путаться.
     """
-    interval_sec = max(1, int(CHECK_INTERVAL_MINUTES * 60))
-    print(f"[INFO] Старт главного цикла. Интервал: {CHECK_INTERVAL_MINUTES} минут.")
+    # защита от странных значений в конфиге
+    try:
+        interval_minutes = float(CHECK_INTERVAL_MINUTES)
+    except (TypeError, ValueError):
+        interval_minutes = 1.0  # дефолт 1 минута
+
+    # минимальный разумный интервал — 10 секунд (0.1667 минуты)
+    if interval_minutes <= 0:
+        interval_minutes = 1.0
+    elif interval_minutes < 0.1667:
+        interval_minutes = 0.1667
+
+    interval_sec = int(interval_minutes * 60)
+
+    print(
+        f"[INFO] Старт главного цикла. "
+        f"Интервал: {interval_minutes:.4f} минут (~{interval_sec} секунд)."
+    )
 
     while True:
         try:
             run_single_iteration()
         except Exception as e:
             print(f"[FATAL] Необработанное исключение в итерации: {e}")
-        print(f"[INFO] Спим {CHECK_INTERVAL_MINUTES} минут...")
+        print(f"[INFO] Спим {interval_sec} секунд...")
         time.sleep(interval_sec)
 
 
