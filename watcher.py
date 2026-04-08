@@ -20,6 +20,321 @@ from typing import Optional, List, Dict
 import requests
 from bs4 import BeautifulSoup
 
+# ===== 0. Ключевые скины, за которые повышаем допуск по цене =====
+
+SPECIAL_SKIN_KEYWORDS = [
+    # майор роза
+    "майор роза", "major rosa", "major rose",
+
+    # звездная шелли
+    "звездная шелли", "звёздная шелли", "star shelly",
+
+    # челленджер кольт
+    "челленджер кольт", "challenger colt",
+
+    # вирусный 8-бит
+    "вирусный 8-бит", "вирус 8-бит", "вирус 8 бит", "virus 8-bit", "virus 8 bit",
+
+    # торговец гейл
+    "торговец гейл", "merchant gale",
+
+    # паладин вольт
+    "паладин вольт", "паладин вольт-меха", "paladin volt",
+
+    # поко старр
+    "поко старр", "poco starr",
+
+    # сантамайк
+    "сантамайк", "santamike", "santa mike", "санта майк",
+
+    # помощница пенни
+    "помощница пенни", "helping penny", "helper penny",
+
+    # нита красный нос
+    "нита красный нос", "red nose nita", "красный нос нита",
+
+    # ведьма шелли
+    "ведьма шелли", "witch shelly",
+
+    # оборотень леон
+    "оборотень леон", "werewolf leon",
+
+    # гвардеец кольт
+    "гвардеец кольт", "guard colt",
+
+    # кунг-фу брок
+    "кунг-фу брок", "кунг фу брок", "kung fu brock", "kung-fu brock",
+
+    # соевый дэррил
+    "соевый деррил", "соевый дэррил", "soy darryl", "soy d4rryl", "соевый d4rry1", "соевый d4r-ry1",
+
+    # контрабандистка пенни
+    "контрабандистка пенни", "smuggler penny",
+
+    # 8-бит из салуна
+    "8-бит из салуна", "8 бит из салуна", "saloon 8-bit", "saloon 8 bit",
+
+    # реактивная джеки
+    "реактивная джеки", "jetty jacky", "jet jacky",
+
+    # волшебник байрон
+    "волшебник байрон", "wizard byron",
+
+    # мегаящик дэррил
+    "мегаящик дэррил", "мегаящик деррил", "megabox darryl", "mega box darryl",
+
+    # героиня биби
+    "героиня биби", "heroine bibi",
+
+    # пельмень дэррил
+    "пельмень дэррил", "dumpling darryl",
+
+    # классический динамайк
+    "классический динамайк", "classic dynamike",
+
+    # рикошет
+    "рикошет", "ricochet",
+
+    # ниан нита
+    "ниан нита", "nian nita",
+
+    # директор базз
+    "директор базз", "director buzz",
+
+    # оса бо
+    "оса бо", "wasp bo",
+
+    # лола пантера
+    "лола пантера", "lola panther",
+
+    # кот-воришка джесси
+    "кот-воришка джесси", "кот воровка джесси", "cat burglar jessie",
+
+    # эль губка
+    "эль губка", "el esponja", "el sponja", "sponge el",
+
+    # сквидварт мортис
+    "сквидварт мортис", "сквидвард мортис", "squidward mortis",
+
+    # планктон
+    "планктон", "plankton",
+
+    # патрик
+    "патрик", "patrick",
+
+    # мистер крабс
+    "мистер крабс", "mr крабс", "mr krabs", "mister krabs",
+
+    # вуди кольт
+    "вуди кольт", "woody colt",
+
+    # бо пип биби
+    "бо пип биби", "bo peep bibi", "bo pip bibi",
+
+    # сэнди джесси
+    "сэнди джесси", "sandy jessie",
+
+    # инопланетянин скуик
+    "инопланетянин скуик", "alien squeak",
+
+    # спиральная собака тик
+    "спиральная собака тик", "spiral dog tick",
+
+    # рекс даг
+    "ркс даг", "рекс даг", "rex doug", "rex dag",
+
+    # классическая шелли
+    "классическая шелли", "classic shelly",
+
+    # красный дракон джесси
+    "красный дракон джесси", "red dragon jessie",
+
+    # мстительная биби
+    "мстительная биби", "vengeful bibi",
+
+    # squad busters шелли
+    "squad busters шелли", "squad busters shelly",
+
+    # корсар кольт
+    "корсар кольт", "corsair colt",
+
+    # б-800
+    "б-800", "б 800", "b-800", "b800",
+
+    # полузащитник булл
+    "полузащитник булл", "midfielder bull",
+
+    # король варваров булл
+    "король варваров булл", "king barbarian bull", "barbarian king bull",
+
+    # суперрейнджер брок
+    "суперрейнджер брок", "super ranger brock", "superranger brock",
+
+    # ретро брок
+    "ретро брок", "retro brock",
+
+    # эль корасон
+    "эль корасон", "el corazon", "el corazón",
+
+    # бэйби шарк примо
+    "бэйби шарк примо", "бэби шарк примо", "baby shark primo",
+
+    # эль тигро
+    "эль тигро", "el tigro", "el tigre",
+
+    # барли с пирогами
+    "барли с пирогами", "bakesale barley", "pie barley",
+
+    # официант барли
+    "официант барли", "waiter barley",
+
+    # трэш-поко
+    "трэш-поко", "trash poco", "trash-poco",
+
+    # пират поко
+    "пират поко", "pirate poco",
+
+    # скелетная роза
+    "скелетная роза", "skeleton rosa",
+
+    # коко роза
+    "коко роза", "coco rosa",
+
+    # роза богомол
+    "роза богомол", "mantis rosa",
+
+    # кошка-воровка джесси
+    "кошка-воровка джесси", "кошка воровка джесси", "cat burglar jessie",
+
+    # кукольная джесси
+    "кукольная джесси", "puppet jessie",
+
+    # портье майк
+    "портье майк", "bellhop mike", "doorman mike",
+
+    # тренер майк
+    "тренер майк", "coach mike",
+
+    # меха годзилла тик
+    "меха годзилла тик", "mecha godzilla tick", "mecha godzila tick",
+
+    # снеговик тик
+    "снеговик тик", "snowman tick", "snow tick",
+
+    # v8-бит
+    "v8-бит", "v8 бит", "v8-bit", "v8 bit",
+
+    # d4r-ry1 (d4rryl)
+    "d4r-ry1", "d4rry1", "d4rryl", "d4r ry1",
+
+    # безумный карл
+    "безумный карл", "mad scientist carl", "mad carl",
+
+    # карл капитан
+    "карл капитан", "captain carl",
+
+    # серфер карл
+    "серфер карл", "surfer carl",
+
+    # светлый бо-меха
+    "светлый бо-меха", "светлый бо меха", "light mech bo", "light mecha bo",
+
+    # сту-панк
+    "сту-панк", "stu-punk", "punk stu",
+
+    # безголовый сту
+    "безголовый сту", "headless stu",
+
+    # диджей френк
+    "диджей френк", "dj frank", "dj френк",
+
+    # ниндзя эш
+    "ниндзя эш", "ninja ash",
+
+    # белль голдхэнд
+    "белль голдхэнд", "belle goldhand", "goldhand belle",
+
+    # трикси колетт
+    "трикси колетт", "trixie collette", "trixie colette", "trixie collett",
+
+    # навигатор колетт
+    "навигатор колетт", "navigator collette", "navigator colette",
+
+    # инспектор колетт
+    "инспектор колетт", "inspector collette", "inspector colette",
+
+    # чола
+    "чола", "chola",
+
+    # индиго тара
+    "индиго тара", "indigo tara",
+
+    # уличная тара
+    "уличная тара", "streetwear tara", "street tara",
+
+    # болотный джин
+    "болотный джин", "swamp gene",
+
+    # гермес макс
+    "гермес макс", "hermes max",
+
+    # уличная макс
+    "уличная макс", "streetwear max", "street max",
+
+    # мистер муха
+    "мистер муха", "mr муха", "mr fly", "mr. fly",
+
+    # граф пингвинула
+    "граф пингвинула", "count pengula", "graph pingvula",
+
+    # картошка скуик
+    "картошка скуик", "potato squeak",
+
+    # скуик "первый приз"
+    "скук первый приз", "скук \"первый приз\"", "squeak first prize",
+
+    # король лу
+    "король лу", "king lou",
+
+    # очаровашка лу
+    "очаровашка лу", "adorable lou", "lou adorable",
+
+    # плохиш базз
+    "плохиш базз", "bad buzz",
+
+    # годзилла базз
+    "годзилла базз", "godzilla buzz",
+
+    # бревновогодний спайк
+    "бревновогодний спайк", "logmas spike",
+
+    # темный лорд спайк
+    "темный лорд спайк", "тёмный лорд спайк", "dark lord spike",
+
+    # темный ворон меха
+    "темный ворон-меха", "темный ворон меха", "тёмный ворон-меха", "dark mecha crow",
+
+    # сладких снов, сэнди
+    "сладких снов, сэнди", "сладких снов сэнди", "sleepy sandy", "sweet dreams sandy",
+
+    # сэнди неукротимая
+    "сэнди «неукротимая»", "сэнди неукротимая", "wild sandy", "unleashed sandy",
+
+    # монстр-тракер мэг
+    "монстр-тракер мэг", "monster tracker meg", "monster trucker meg",
+]
+
+
+def has_special_skin(text: str) -> bool:
+    """
+    Проверяем, содержит ли строка названия каких-нибудь исторических/особых скинов.
+    """
+    t = (text or "").lower()
+    for kw in SPECIAL_SKIN_KEYWORDS:
+        if kw in t:
+            return True
+    return False
+
 CONFIG_PATH = "config.json"
 STATE_PATH = "state.json"
 
@@ -396,7 +711,13 @@ def filter_profitable_offers(offers: List[Offer]) -> List[Offer]:
             continue
 
         price_min, price_max = rng
-        soft_max = price_max + EXTRA_ABOVE_MAX
+
+        # Если в названии упоминается один из "исторических" скинов —
+        # даём офферу право быть дороже на +500 рублей.
+        extra_for_skin = 500.0 if has_special_skin(offer.title) else 0.0
+
+        # мягкий верхний порог: базовый max + допуск + бонус за скины
+        soft_max = price_max + EXTRA_ABOVE_MAX + extra_for_skin
 
         # отсекаем и ниже диапазона, и сильно выше
         if price < price_min or price > soft_max:
@@ -457,6 +778,11 @@ def format_offer_message(offer: Offer) -> str:
     diff_text = ""
     if isinstance(heroes, int):
         base_from, base_price = get_brawlers_base_range(heroes)
+
+        # Если в названии есть крутые скины — считаем базу на +500 выше
+        if has_special_skin(offer.title):
+            base_price += 500.0
+
         delta = price - base_price
         delta_rounded = round(delta)
 
