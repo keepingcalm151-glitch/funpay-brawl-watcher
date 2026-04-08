@@ -407,6 +407,77 @@ def filter_profitable_offers(offers: List[Offer]) -> List[Offer]:
     return profitable
 
 
+def get_brawlers_base_range(heroes: int) -> tuple[int, float]:
+    """
+    По количеству бойцов возвращаем:
+      (нижняя_граница_диапазона, базовая_цена_в_рублях)
+
+    Диапазоны и базовые цены:
+      70–79  -> от 70 бойцов, 300 ₽
+      80–84  -> от 80 бойцов, 420 ₽
+      85–89  -> от 85 бойцов, 450 ₽
+      90–94  -> от 90 бойцов, 650 ₽
+      95–99  -> от 95 бойцов, 700 ₽
+      100+   -> от 100 бойцов, 1000 ₽
+
+    Если heroes < 70 — всё равно возвращаем (70, 300) как базу по умолчанию.
+    """
+    if heroes < 70:
+        return 70, 300.0
+
+    if 70 <= heroes <= 79:
+        return 70, 300.0
+    if 80 <= heroes <= 84:
+        return 80, 420.0
+    if 85 <= heroes <= 89:
+        return 85, 450.0
+    if 90 <= heroes <= 94:
+        return 90, 650.0
+    if 95 <= heroes <= 99:
+        return 95, 700.0
+
+    # 100 и выше
+    return 100, 1000.0
+
+
+def format_offer_message(offer: Offer) -> str:
+    """
+    Формируем текст для Telegram по офферу с учётом
+    разницы относительно базового диапазона.
+    Пример:
+      Найден аккаунт:
+      Бойцов: 74
+      Стоимость: 327.19 ₽ на +27 рублей относительно диапазона от 70 бойцов
+      Ссылка: ...
+    """
+    heroes = offer.heroes if offer.heroes is not None else "неизвестно"
+    price = offer.price_rub
+
+    # если количество бойцов известно — считаем разницу
+    diff_text = ""
+    if isinstance(heroes, int):
+        base_from, base_price = get_brawlers_base_range(heroes)
+        delta = price - base_price
+        delta_rounded = round(delta)
+
+        if delta_rounded > 0:
+            sign = "+"
+        elif delta_rounded < 0:
+            sign = "−"  # можно заменить на "-"
+        else:
+            sign = "±"
+
+        diff_text = f" на {sign}{abs(delta_rounded)} рублей относительно диапазона от {base_from} бойцов"
+
+    lines: List[str] = []
+    lines.append("Найден аккаунт:")
+    lines.append(f"Бойцов: {heroes}")
+    lines.append(f"Стоимость: {price:.2f} ₽{diff_text}")
+    lines.append(f"Ссылка: {offer.url}")
+
+    return "\n".join(lines)
+
+
 # ===== 8. Отправка выгодных офферов в Telegram =====
 
 def send_new_offers_to_telegram(offers: List[Offer], state: dict) -> None:
@@ -439,33 +510,13 @@ def send_new_offers_to_telegram(offers: List[Offer], state: dict) -> None:
             # изменить правила и пересмотреть такие офферы, если захочешь
             continue
 
-        heroes = offer.heroes if offer.heroes is not None else "неизвестно"
-        price = offer.price_rub
-
-        label_text = ""
-        if isinstance(heroes, int):
-            rng = get_price_range_for_heroes(heroes)
-            if rng is not None:
-                price_min, price_max = rng
-                label = calculate_value_label(price, price_min, price_max)
-                if label:
-                    label_text = label
-
-        parts = [
-            "Найден аккаунт:",
-            f"Бойцов: {heroes}",
-            f"Стоимость: {price:.2f} ₽",
-        ]
-        if label_text:
-            parts.append(f"Метка выгодности: {label_text}")
-        parts.append(f"Ссылка: {offer.url}")
-
-        text = "\n".join(parts)
+        text = format_offer_message(offer)
 
         try:
+            heroes_log = offer.heroes if offer.heroes is not None else "неизвестно"
             print(
                 f"[INFO] Отправляем оффер {offer.offer_id} "
-                f"({price:.2f} ₽, {heroes} бойцов, метка: {label_text or 'нет'})"
+                f"({offer.price_rub:.2f} ₽, {heroes_log} бойцов)"
             )
             send_telegram_message(text)
             sent_offers[offer.offer_id] = True
@@ -476,7 +527,6 @@ def send_new_offers_to_telegram(offers: List[Offer], state: dict) -> None:
                 break
         except Exception as e:
             print(f"[ERROR] Не удалось отправить сообщение в Telegram: {e}")
-
 
 
 # ===== 9. Основной цикл =====
