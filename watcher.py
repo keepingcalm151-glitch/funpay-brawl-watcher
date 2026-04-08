@@ -10,6 +10,7 @@
 #   - фильтруем по твоим правилам выгодности
 #   - отправляем подходящие варианты в Telegram
 
+import random
 import json
 import os
 import time
@@ -32,7 +33,7 @@ else:
 
 TELEGRAM_BOT_TOKEN: str = config["telegram_bot_token"]
 TELEGRAM_CHAT_ID: str = config["telegram_chat_id"]
-CHECK_INTERVAL_MINUTES: int = int(config.get("check_interval_minutes", 5))
+CHECK_INTERVAL_SECONDS: int = int(config.get("check_interval_seconds", 60))
 
 BASE_URL: str = config.get("base_url", "https://funpay.com").rstrip("/")
 BRAWL_ACCOUNTS_URL: str = config.get(
@@ -470,28 +471,26 @@ def run_single_iteration() -> None:
 def main_loop() -> None:
     """
     Бесконечный цикл для Railway.
-    Нормализуем интервал:
-      - если из конфига пришёл мусор или слишком маленькое число,
-        ставим безопасное значение по умолчанию.
-    Логируем интервал в секундах, чтобы не путаться.
+    Интервал читаем в секундах из CHECK_INTERVAL_SECONDS.
+    Перед каждой итерацией выбираем случайный интервал вокруг базового,
+    чтобы это выглядело как ручное обновление (чуть раньше/чуть позже).
     """
-    # защита от странных значений в конфиге
+    # читаем базовый интервал из конфига
     try:
-        interval_minutes = float(CHECK_INTERVAL_MINUTES)
+        base_interval = int(CHECK_INTERVAL_SECONDS)
     except (TypeError, ValueError):
-        interval_minutes = 0.2500  # дефолт 1 минута
+        base_interval = 5  # дефолт 5 секунд
 
-    # минимальный разумный интервал — 29 секунд (0.3000 минуты)
-    if interval_minutes <= 0:
-        interval_minutes = 0.2500
-    elif interval_minutes < 0.3000:
-        interval_minutes = 0.3000
-
-    interval_sec = int(interval_minutes * 60)
+    # безопасный базовый диапазон: минимум 3, максимум 10
+    if base_interval < 3:
+        base_interval = 3
+    elif base_interval > 10:
+        base_interval = 10
 
     print(
         f"[INFO] Старт главного цикла. "
-        f"Интервал: {interval_minutes:.4f} минут (~{interval_sec} секунд)."
+        f"Базовый интервал: {base_interval} секунд "
+        f"(динамический диапазон: base±1)."
     )
 
     while True:
@@ -499,6 +498,12 @@ def main_loop() -> None:
             run_single_iteration()
         except Exception as e:
             print(f"[FATAL] Необработанное исключение в итерации: {e}")
+
+        # выбираем случайный интервал: base-1 .. base+1
+        low = max(1, base_interval - 1)
+        high = base_interval + 1
+        interval_sec = random.randint(low, high)
+
         print(f"[INFO] Спим {interval_sec} секунд...")
         time.sleep(interval_sec)
 
