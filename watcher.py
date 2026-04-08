@@ -151,42 +151,76 @@ def extract_heroes_from_offer_html(html: str) -> Optional[int]:
     return None
 
 
+def is_description_forbidden(html: str) -> bool:
+    """
+    Проверяем подробное описание оффера на наличие фраз,
+    означающих, что перепривязка/смена почты недоступна.
+
+    Ищем в блоке "Подробное описание" текст и проверяем по ключевым словам.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+
+    # находим param-item, где <h5>Подробное описание</h5>
+    detailed_block = None
+    for item in soup.find_all("div", class_="param-item"):
+        h5 = item.find("h5")
+        if not h5:
+            continue
+        title = h5.get_text(" ", strip=True).lower()
+        if "подробное описание" in title:
+            detailed_block = item
+            break
+
+    if not detailed_block:
+        return False  # нет подробного описания — не режем по этой причине
+
+    # текст самого описания
+    text_div = detailed_block.find("div")
+    if not text_div:
+        return False
+
+    description_text = text_div.get_text(" ", strip=True).lower()
+
+    # список фраз, по которым считаем оффер неподходящим
+    forbidden_phrases = [
+        "перевязку не делаю",
+        "перепривязку не делаю",
+        "перевязка недоступна",
+        "перепривязка недоступна",
+        "без перепривязки",
+        "без перевязки",
+        "не делаю перевязку",
+        "не делаю перепривязку",
+        "нет перепривязки",
+        "нет перевязки",
+        "пп не делаю",
+        "без пп",
+        "пп недоступна",
+    ]
+
+    for phrase in forbidden_phrases:
+        if phrase in description_text:
+            return True
+
+    return False
+
+
 # ===== 6. Сбор офферов (с пропуском уже просмотренных) =====
 
 def collect_offers(state: dict) -> List[Offer]:
     """
     Загружаем страницу со всеми аккаунтами Brawl Stars и парсим офферы.
 
-    Ищем элементы вида:
-      <a href="https://funpay.com/lots/offer?id=66881057"
-         class="tc-item lazyload-hidden"
-         data-online="1"
-         data-auto="1"
-         data-f-cup="1056"
-         data-f-hero="14">
-
-      ...
-
-      <div class="tc-price" data-s="157.535642">
-          <div>157.54 <span class="unit">₽</span></div>
-      </div>
-
-    Нас интересуют:
-      - href (ссылка на оффер)
-      - data-f-hero (кол-во бойцов, если есть)
-      - data-s (цена в рублях)
-      - краткое описание (div.tc-desc-text)
-      - ник продавца (div.media-user-name)
-
-    Если heroes в data-f-hero нет, пытаемся достать его со страницы оффера.
-    Также пропускаем офферы, которые уже были просмотрены ранее (seen_offers).
+    На этом этапе:
+      - НЕ ходим во внутренние страницы офферов;
+      - НЕ читаем описания;
+      - heroes берём только из data-f-hero (если его нет — оффер пропускаем);
+      - запоминаем только новые офферы (по seen_offers).
     """
     html = fetch_page(BRAWL_ACCOUNTS_URL)
     soup = BeautifulSoup(html, "html.parser")
 
     offers: List[Offer] = []
-
-    # список уже просмотренных офферов
     seen_offers: Dict[str, bool] = state.setdefault("seen_offers", {})
 
     for a in soup.find_all("a", class_="tc-item"):
@@ -209,7 +243,7 @@ def collect_offers(state: dict) -> List[Offer]:
         if not offer_id:
             continue
 
-        # если этот оффер мы уже видели в прошлых итерациях — пропускаем сразу
+        # уже видели — пропускаем
         if seen_offers.get(offer_id):
             continue
 
@@ -235,36 +269,22 @@ def collect_offers(state: dict) -> List[Offer]:
             except ValueError:
                 continue
 
-        # Кол-во бойцов: сначала пытаемся взять из data-f-hero
+        # Кол-во бойцов только из data-f-hero
         heroes_raw = a.get("data-f-hero")
-        heroes_count: Optional[int] = None
-        if heroes_raw:
-            try:
-                heroes_count = int(heroes_raw)
-            except ValueError:
-                heroes_count = None
-
-        # Если heroes_count всё ещё None — пытаемся вытащить со страницы оффера
-        if heroes_count is None:
-            try:
-                offer_html = fetch_page(offer_url)
-                heroes_count = extract_heroes_from_offer_html(offer_html)
-            except Exception as e:
-                print(f"[WARN] Не удалось получить heroes для оффера {offer_id}: {e}")
-                heroes_count = None
+        if not heroes_raw:
+            continue
+        try:
+            heroes_count = int(heroes_raw)
+        except ValueError:
+            continue
 
         # Краткое описание
         desc_div = a.find("div", class_="tc-desc-text")
-        if desc_div:
-            title = desc_div.get_text(" ", strip=True)
-        else:
-            title = ""
+        title = desc_div.get_text(" ", strip=True) if desc_div else ""
 
         # Ник продавца
-        seller_name = ""
         seller_div = a.find("div", class_="media-user-name")
-        if seller_div:
-            seller_name = seller_div.get_text(" ", strip=True)
+        seller_name = seller_div.get_text(" ", strip=True) if seller_div else ""
 
         offer = Offer(
             offer_id=offer_id,
@@ -276,12 +296,10 @@ def collect_offers(state: dict) -> List[Offer]:
         )
         offers.append(offer)
 
-        # помечаем оффер как "просмотренный", чтобы в следующих итерациях его не трогать
+        # помечаем как просмотренный
         seen_offers[offer_id] = True
 
-    # сохраняем обновлённое состояние
     save_state(state)
-
     print(f"[INFO] На странице Brawl Stars найдено офферов (новых): {len(offers)}")
     return offers
 
@@ -395,6 +413,7 @@ def send_new_offers_to_telegram(offers: List[Offer], state: dict) -> None:
     """
     Отправляем новые выгодные офферы в Telegram
     и помечаем их в state, чтобы не дублировать.
+    Перед отправкой дополнительно проверяем подробное описание.
     """
     if not offers:
         print("[INFO] Нет новых выгодных офферов для отправки.")
@@ -405,6 +424,19 @@ def send_new_offers_to_telegram(offers: List[Offer], state: dict) -> None:
 
     for offer in offers:
         if sent_offers.get(offer.offer_id):
+            continue
+
+        # Дополнительная проверка: подробное описание (перепривязка и т.п.)
+        offer_html = None
+        try:
+            offer_html = fetch_page(offer.url)
+        except Exception as e:
+            print(f"[WARN] Не удалось загрузить HTML оффера {offer.offer_id} для проверки описания: {e}")
+
+        if offer_html is not None and is_description_forbidden(offer_html):
+            print(f"[INFO] Оффер {offer.offer_id} отфильтрован по описанию (перепривязка недоступна).")
+            # здесь намеренно НЕ помечаем как sent_offers, чтобы в будущем можно было
+            # изменить правила и пересмотреть такие офферы, если захочешь
             continue
 
         heroes = offer.heroes if offer.heroes is not None else "неизвестно"
@@ -444,6 +476,7 @@ def send_new_offers_to_telegram(offers: List[Offer], state: dict) -> None:
                 break
         except Exception as e:
             print(f"[ERROR] Не удалось отправить сообщение в Telegram: {e}")
+
 
 
 # ===== 9. Основной цикл =====
