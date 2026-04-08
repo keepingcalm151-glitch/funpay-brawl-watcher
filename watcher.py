@@ -312,7 +312,7 @@ def get_price_range_for_heroes(heroes: int) -> Optional[tuple[float, float]]:
         return 100.0, 650.0
     if 95 <= heroes <= 99:
         return 100.0, 700.0
-    if heroes >= 100:
+    if 100 <= heroes <= 130:
         return 100.0, 1000.0
     return None
 
@@ -351,15 +351,16 @@ def filter_profitable_offers(offers: List[Offer]) -> List[Offer]:
     Фильтрация офферов по количеству бойцов и цене.
 
     Логика:
-      - если heroes отсутствует или < 70 — оффер не рассматриваем;
+      - если heroes отсутствует или < 70 или > 170 — оффер не рассматриваем (get_price_range_for_heroes вернёт None);
       - по heroes выбираем базовый ценовой диапазон (min, max);
-      - жёсткий нижний порог: price_rub >= min;
-      - мягкий верхний порог: price_rub <= max + 40;
-      - иначе оффер неинтересен.
+      - глобальный нижний порог: цена >= 200 ₽;
+      - жёсткий нижний порог по диапазону: price_rub >= price_min;
+      - мягкий верхний порог: price_rub <= price_max + 40 (если хочешь чуть дороже).
     """
     profitable: List[Offer] = []
 
-    EXTRA_ABOVE_MAX = 40.0  # сколько рублей допускаем выше верхней границы
+    GLOBAL_MIN_PRICE = 200.0
+    EXTRA_ABOVE_MAX = 40.0  # допуск выше верхней границы диапазона
 
     for offer in offers:
         if offer.heroes is None:
@@ -368,6 +369,10 @@ def filter_profitable_offers(offers: List[Offer]) -> List[Offer]:
         heroes = offer.heroes
         price = offer.price_rub
 
+        # глобальный минимум цены
+        if price < GLOBAL_MIN_PRICE:
+            continue
+
         rng = get_price_range_for_heroes(heroes)
         if rng is None:
             continue
@@ -375,7 +380,7 @@ def filter_profitable_offers(offers: List[Offer]) -> List[Offer]:
         price_min, price_max = rng
         soft_max = price_max + EXTRA_ABOVE_MAX
 
-        # отсекаем слишком дешёвые и слишком дорогие
+        # отсекаем и ниже диапазона, и сильно выше
         if price < price_min or price > soft_max:
             continue
 
