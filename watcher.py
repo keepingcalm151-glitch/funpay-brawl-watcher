@@ -296,6 +296,7 @@ class Offer:
     url: str               # полная ссылка на оффер
     price_rub: float       # цена в рублях
     heroes: Optional[int]  # количество бойцов (если знаем)
+    cups: Optional[int]    # кубки (трофеи), если знаем
     title: str             # краткое описание
     seller_name: str       # ник продавца
 
@@ -456,6 +457,15 @@ def collect_offers(state: dict) -> List[Offer]:
         except ValueError:
             continue
 
+        # Кубки из data-f-cup, если есть
+        cups_raw = a.get("data-f-cup")
+        cups_count: Optional[int] = None
+        if cups_raw:
+            try:
+                cups_count = int(cups_raw)
+            except ValueError:
+                cups_count = None
+
         # Краткое описание
         desc_div = a.find("div", class_="tc-desc-text")
         title = desc_div.get_text(" ", strip=True) if desc_div else ""
@@ -469,6 +479,7 @@ def collect_offers(state: dict) -> List[Offer]:
             url=offer_url,
             price_rub=price_val,
             heroes=heroes_count,
+            cups=cups_count,
             title=title,
             seller_name=seller_name,
         )
@@ -544,19 +555,21 @@ def calculate_value_label(price: float, price_min: float, price_max: float) -> O
 
 def filter_profitable_offers(offers: List[Offer]) -> List[Offer]:
     """
-    Фильтрация офферов по количеству бойцов и цене.
+    Фильтрация офферов по количеству бойцов, цене и кубкам.
 
     Логика:
-      - если heroes отсутствует или < 70 или > 170 — оффер не рассматриваем (get_price_range_for_heroes вернёт None);
+      - если heroes отсутствует или < 70 или > 130 — оффер не рассматриваем (get_price_range_for_heroes вернёт None);
       - по heroes выбираем базовый ценовой диапазон (min, max);
-      - глобальный нижний порог: цена >= 200 ₽;
+      - глобальный нижний порог цены: >= 200 ₽;
       - жёсткий нижний порог по диапазону: price_rub >= price_min;
-      - мягкий верхний порог: price_rub <= price_max + 40 (если хочешь чуть дороже).
+      - мягкий верхний порог: price_rub <= price_max + 40;
+      - дополнительный фильтр: cups (кубки) >= 10000, если известны.
     """
     profitable: List[Offer] = []
 
     GLOBAL_MIN_PRICE = 200.0
-    EXTRA_ABOVE_MAX = 40.0  # допуск выше верхней границы диапазона
+    EXTRA_ABOVE_MAX = 40.0
+    MIN_CUPS = 10000
 
     for offer in offers:
         if offer.heroes is None:
@@ -574,15 +587,14 @@ def filter_profitable_offers(offers: List[Offer]) -> List[Offer]:
             continue
 
         price_min, price_max = rng
-
-        # Надбавка к допустимой цене за счёт редких скинов в названии
-        extra_for_skin = bonus_for_skins(offer.title)
-
-        # мягкий верхний порог: базовый max + допуск + бонус за скины
-        soft_max = price_max + EXTRA_ABOVE_MAX + extra_for_skin
+        soft_max = price_max + EXTRA_ABOVE_MAX
 
         # отсекаем и ниже диапазона, и сильно выше
         if price < price_min or price > soft_max:
+            continue
+
+        # фильтр по кубкам: если знаем кубки и их меньше минимума — отбрасываем
+        if offer.cups is not None and offer.cups < MIN_CUPS:
             continue
 
         profitable.append(offer)
