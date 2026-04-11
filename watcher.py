@@ -372,6 +372,8 @@ def is_description_forbidden(html: str) -> bool:
         "в аренду",
         "на время",
         "НА ВРЕМЯ",
+        "ЕСТЬ ПАССАЖИР",
+        "есть пассажир",
     ]
 
     for phrase in forbidden_phrases:
