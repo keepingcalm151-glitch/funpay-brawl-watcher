@@ -766,26 +766,12 @@ def run_single_iteration() -> None:
 def main_loop() -> None:
     """
     Бесконечный цикл для Railway.
-    Интервал читаем в секундах из CHECK_INTERVAL_SECONDS.
-    Перед каждой итерацией выбираем случайный интервал вокруг базового,
-    чтобы это выглядело как ручное обновление (чуть раньше/чуть позже).
+    Теперь проверяем сайт примерно раз в секунду
+    с небольшим рандомом (от 1.0 до 2.0 секунд между запросами).
     """
-    # читаем базовый интервал из конфига
-    try:
-        base_interval = int(CHECK_INTERVAL_SECONDS)
-    except (TypeError, ValueError):
-        base_interval = 5  # дефолт 5 секунд
-
-    # безопасный базовый диапазон: минимум 3, максимум 10
-    if base_interval < 3:
-        base_interval = 3
-    elif base_interval > 10:
-        base_interval = 10
-
     print(
-        f"[INFO] Старт главного цикла. "
-        f"Базовый интервал: {base_interval} секунд "
-        f"(динамический диапазон: base±1)."
+        "[INFO] Старт главного цикла. "
+        "Интервал проверки ~1 секунда (динамический диапазон 1.0–2.0 сек)."
     )
 
     while True:
@@ -794,12 +780,10 @@ def main_loop() -> None:
         except Exception as e:
             print(f"[FATAL] Необработанное исключение в итерации: {e}")
 
-        # выбираем случайный интервал: base-1 .. base+1
-        low = max(1, base_interval - 1)
-        high = base_interval + 1
-        interval_sec = random.randint(low, high)
+        # случайный интервал в диапазоне [1.0, 2.0] секунд
+        interval_sec = random.uniform(1.0, 2.0)
 
-        print(f"[INFO] Спим {interval_sec} секунд...")
+        print(f"[INFO] Спим {interval_sec:.2f} секунд...")
         time.sleep(interval_sec)
 
 
