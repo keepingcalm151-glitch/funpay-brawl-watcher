@@ -739,6 +739,32 @@ def send_new_offers_to_telegram(offers: List[Offer], state: dict) -> None:
             print(f"[ERROR] Не удалось отправить сообщение в Telegram: {e}")
 
 
+from datetime import datetime
+
+
+def is_quiet_time() -> bool:
+    """
+    Возвращает True, если сейчас время в диапазоне тихих часов.
+    Интервал задаётся в часах [QUIET_HOURS_START, QUIET_HOURS_END) по времени сервера.
+    Поддерживает и случай, когда интервал "через полночь", например 23–6.
+    """
+    now_hour = datetime.now().hour
+
+    start = QUIET_HOURS_START
+    end = QUIET_HOURS_END
+
+    if start == end:
+        # одинаковые значения — считаем, что тихих часов нет
+        return False
+
+    if start < end:
+        # обычный случай: например 1–7
+        return start <= now_hour < end
+    else:
+        # через полночь: например 23–6
+        return now_hour >= start or now_hour < end
+
+
 # ===== 9. Основной цикл =====
 
 def run_single_iteration() -> None:
@@ -769,8 +795,9 @@ def run_single_iteration() -> None:
 def main_loop() -> None:
     """
     Бесконечный цикл для Railway.
-    Теперь проверяем сайт примерно раз в секунду
-    с небольшим рандомом (от 1.0 до 2.0 секунд между запросами).
+    Теперь:
+      - если сейчас тихие часы (например 01:00–07:00) — не парсим, просто спим подольше;
+      - иначе запускаем обычную итерацию с коротким интервалом.
     """
     print(
         "[INFO] Старт главного цикла. "
@@ -779,7 +806,13 @@ def main_loop() -> None:
 
     while True:
         try:
+            if is_quiet_time():
+                print("[INFO] Тихие часы, парсинг отключен. Спим 300 секунд...")
+                time.sleep(300)  # 5 минут
+                continue
+
             run_single_iteration()
+
         except Exception as e:
             print(f"[FATAL] Необработанное исключение в итерации: {e}")
 
