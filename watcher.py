@@ -562,10 +562,11 @@ def filter_profitable_offers(offers: List[Offer]) -> List[Offer]:
     """
     Фильтрация офферов по количеству бойцов, цене и кубкам.
 
-    Новая логика:
+    Логика:
       - если heroes отсутствует или < 45 — оффер не рассматриваем;
-      - по heroes берём максимальную допустимую цену (get_max_price_for_heroes);
-      - если price_rub > max_price — оффер отбрасываем;
+      - по heroes берём базовый максимум цены (get_max_price_for_heroes);
+      - для 45–59 и 60–69 бойцов: жёсткий потолок (100 и 180, без +40);
+      - для 70+ бойцов: мягкий потолок = базовый максимум + 40;
       - по кубкам: если известны и < 10000 — отбрасываем.
     """
     profitable: List[Offer] = []
@@ -579,13 +580,20 @@ def filter_profitable_offers(offers: List[Offer]) -> List[Offer]:
         heroes = offer.heroes
         price = offer.price_rub
 
-        # максимум цены по количеству бойцов
-        max_price = get_max_price_for_heroes(heroes)
-        if max_price is None:
+        # базовый максимум по таблице
+        base_max_price = get_max_price_for_heroes(heroes)
+        if base_max_price is None:
             continue
 
+        # для 45–59 и 60–69: жёсткий потолок (100, 180)
+        # для 70+ : разрешаем +40 к базовому максимуму
+        if heroes >= 70:
+            allowed_max_price = base_max_price + 40.0
+        else:
+            allowed_max_price = base_max_price
+
         # цена выше разрешённого потолка — отбрасываем
-        if price > max_price:
+        if price > allowed_max_price:
             continue
 
         # фильтр по кубкам: если знаем кубки и их меньше минимума — отбрасываем
