@@ -1,8 +1,6 @@
 # watcher.py
-#
 # Воркер для Railway:
 #   Procfile: worker: python watcher.py
-#
 # Логика:
 #   - каждые N минут заходим на страницу аккаунтов Brawl Stars на FunPay
 #   - парсим список офферов (ссылки, цена, количество бойцов)
@@ -495,32 +493,39 @@ def collect_offers(state: dict) -> List[Offer]:
 
 # ===== 7. Выгодность по бойцам и цене =====
 
-def get_price_range_for_heroes(heroes: int) -> Optional[tuple[float, float]]:
+def get_max_price_for_heroes(heroes: int) -> Optional[float]:
     """
-    Возвращает (min_price, max_price) для заданного количества бойцов.
-    Диапазоны по ТЗ:
+    Возвращает максимальную допустимую цену для заданного количества бойцов
+    по таблице:
+      от 45 бойцов - 100
+      от 60 бойцов - 180
+      от 70 бойцов - 300
+      от 80 бойцов - 420
+      от 85 бойцов - 450
+      от 90 бойцов - 650
+      от 95 бойцов - 700
+      от 100 бойцов - 1000
 
-      70–79    -> 100–300
-      80–84    -> 100–420
-      85–89    -> 100–450
-      90–94    -> 100–650
-      95–99    -> 100–700
-      >= 100   -> 100–1000
-
-    Если heroes < 70 — возвращаем None (оффер нами не интересен).
+    Если бойцов меньше 45 — оффер не интересен (вернём None).
     """
-    if 70 <= heroes <= 79:
-        return 100.0, 300.0
-    if 80 <= heroes <= 84:
-        return 100.0, 420.0
-    if 85 <= heroes <= 89:
-        return 100.0, 450.0
-    if 90 <= heroes <= 94:
-        return 100.0, 650.0
-    if 95 <= heroes <= 99:
-        return 100.0, 700.0
-    if 100 <= heroes <= 120:
-        return 100.0, 1000.0
+    if heroes < 45:
+        return None
+    if heroes >= 100:
+        return 1000.0
+    if heroes >= 95:
+        return 700.0
+    if heroes >= 90:
+        return 650.0
+    if heroes >= 85:
+        return 450.0
+    if heroes >= 80:
+        return 420.0
+    if heroes >= 70:
+        return 300.0
+    if heroes >= 60:
+        return 180.0
+    if heroes >= 45:
+        return 100.0
     return None
 
 
@@ -557,18 +562,14 @@ def filter_profitable_offers(offers: List[Offer]) -> List[Offer]:
     """
     Фильтрация офферов по количеству бойцов, цене и кубкам.
 
-    Логика:
-      - если heroes отсутствует или < 70 или > 130 — оффер не рассматриваем (get_price_range_for_heroes вернёт None);
-      - по heroes выбираем базовый ценовой диапазон (min, max);
-      - глобальный нижний порог цены: >= 200 ₽;
-      - жёсткий нижний порог по диапазону: price_rub >= price_min;
-      - мягкий верхний порог: price_rub <= price_max + 40;
-      - дополнительный фильтр: cups (кубки) >= 10000, если известны.
+    Новая логика:
+      - если heroes отсутствует или < 45 — оффер не рассматриваем;
+      - по heroes берём максимальную допустимую цену (get_max_price_for_heroes);
+      - если price_rub > max_price — оффер отбрасываем;
+      - по кубкам: если известны и < 10000 — отбрасываем.
     """
     profitable: List[Offer] = []
 
-    GLOBAL_MIN_PRICE = 200.0
-    EXTRA_ABOVE_MAX = 40.0
     MIN_CUPS = 10000
 
     for offer in offers:
@@ -578,19 +579,13 @@ def filter_profitable_offers(offers: List[Offer]) -> List[Offer]:
         heroes = offer.heroes
         price = offer.price_rub
 
-        # глобальный минимум цены
-        if price < GLOBAL_MIN_PRICE:
+        # максимум цены по количеству бойцов
+        max_price = get_max_price_for_heroes(heroes)
+        if max_price is None:
             continue
 
-        rng = get_price_range_for_heroes(heroes)
-        if rng is None:
-            continue
-
-        price_min, price_max = rng
-        soft_max = price_max + EXTRA_ABOVE_MAX
-
-        # отсекаем и ниже диапазона, и сильно выше
-        if price < price_min or price > soft_max:
+        # цена выше разрешённого потолка — отбрасываем
+        if price > max_price:
             continue
 
         # фильтр по кубкам: если знаем кубки и их меньше минимума — отбрасываем
