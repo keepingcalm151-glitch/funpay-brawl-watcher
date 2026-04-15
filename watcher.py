@@ -207,6 +207,9 @@ BRAWL_ACCOUNTS_URL: str = config.get(
 
 MAX_SIGNALS_PER_DAY: int = int(config.get("max_signals_per_day", 100))
 
+QUIET_HOURS_START: int = int(config.get("quiet_hours_start", 1))
+QUIET_HOURS_END: int = int(config.get("quiet_hours_end", 7))
+
 
 def skins_bonus_breakdown(text: str) -> list[tuple[str, float]]:
     """
