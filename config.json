@@ -1,6 +1,6 @@
 {
-  "telegram_bot_token": "8662544938:AAGqY4_SOUk9siTkaSKQQZ2Mk1scW_7H11g",
-  "telegram_chat_id": "-1003937474098",
+  "telegram_bot_token": "",
+  "telegram_chat_id": "",
   "base_url": "https://funpay.com",
   "brawl_accounts_url": "https://funpay.com/lots/436/",
   "max_signals_per_day": 100,
