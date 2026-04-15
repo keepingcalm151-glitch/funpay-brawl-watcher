@@ -185,16 +185,15 @@ def bonus_for_skins(text: str) -> float:
             total += SKIN_BONUSES.get(skin_name, 0)
     return total
 
-CONFIG_PATH = "config.json"
 STATE_PATH = "state.json"
 
-# ===== 1. Загрузка конфигурации =====
+# ===== 1. Загрузка конфигурации только из переменной окружения CONFIG_JSON =====
 
-if os.getenv("CONFIG_JSON"):
-    config = json.loads(os.getenv("CONFIG_JSON"))
-else:
-    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-        config = json.load(f)
+config_raw = os.getenv("CONFIG_JSON")
+if not config_raw:
+    raise RuntimeError("CONFIG_JSON не задан или пуст. Задай переменную окружения CONFIG_JSON с валидным JSON.")
+
+config = json.loads(config_raw)
 
 TELEGRAM_BOT_TOKEN: str = config["telegram_bot_token"]
 TELEGRAM_CHAT_ID: str = config["telegram_chat_id"]
