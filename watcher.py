@@ -520,7 +520,7 @@ def get_price_range_for_heroes(heroes: int) -> Optional[tuple[float, float]]:
     if 95 <= heroes <= 99:
         return 100.0, 700.0
     if 100 <= heroes <= 120:
-        return 100.0, 1500.0
+        return 100.0, 1000.0
     return None
 
 
