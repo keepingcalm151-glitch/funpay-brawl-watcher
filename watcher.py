@@ -338,15 +338,58 @@ class Offer:
 
 # ===== 5. Парсинг страницы оффера: бойцы =====
 
-def extract_heroes_from_offer_html(html: str) -> Optional[int]:
+def extract_heroes_from_text(text: str) -> Optional[int]:
     """
-    Пытаемся вытащить количество бойцов из страницы конкретного оффера.
-    Берём первое найденное число после слов "бойцы/бойцов/бравлеры/бравлеров/brawler/brawlers"
-    в любом месте текста.
+    Пытаемся вытащить количество бойцов/бравлеров из произвольного текста,
+    даже если там опечатки.
+
+    Логика:
+      - проверяем, есть ли в тексте хоть какие-то "похожие" куски на слово
+        бойцы/бравлеры/brawl (с возможными ошибками);
+      - если есть — ищем все 2–3-значные числа 50–150 и берём самое "правдоподобное".
     """
-    soup = BeautifulSoup(html, "html.parser")
-    text = soup.get_text(" ", strip=True)
-    return extract_heroes_from_text(text)
+    if not text:
+        return None
+
+    t = text.lower()
+
+    # Фрагменты, по которым считаем, что речь идёт про бойцов.
+    # Сюда можно добавлять свои варианты опечаток.
+    keyword_fragments = [
+        "бойц",    # бойцы, бойцов, боцы, бойцев и т.д.
+        "бравл",   # бравлер, бравлеров, браул, бравлeр и т.д.
+        "браул",
+        "брол",
+        "броул",
+        "brawl",
+        "brawler",
+        "brawlers",
+    ]
+
+    if not any(k in t for k in keyword_fragments):
+        # В тексте вообще нет ничего похожего на "бойцы/бравлеры" — выходим
+        return None
+
+    # Ищем ВСЕ числа в тексте
+    nums = re.findall(r"(\d{2,3})", t)
+    if not nums:
+        return None
+
+    # Фильтруем по разумному диапазону для количества бойцов
+    candidates = []
+    for s in nums:
+        try:
+            n = int(s)
+        except ValueError:
+            continue
+        if 50 <= n <= 150:  # можно подправить диапазон под свои реальные данные
+            candidates.append(n)
+
+    if not candidates:
+        return None
+
+    # Берём, например, максимальное (чаще всего реальное число бойцов больше прочих чисел)
+    return max(candidates)
 
 
 def is_description_forbidden(html: str) -> bool:
