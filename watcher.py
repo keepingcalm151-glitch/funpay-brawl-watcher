@@ -390,11 +390,12 @@ def collect_offers(state: dict) -> List[Offer]:
     """
     Загружаем страницу со всеми аккаунтами Brawl Stars и парсим офферы.
 
-    На этом этапе:
-      - НЕ ходим во внутренние страницы офферов;
-      - НЕ читаем описания;
-      - heroes берём только из data-f-hero (если его нет — оффер пропускаем);
-      - запоминаем только новые офферы (по seen_offers).
+    Логика:
+      - Сначала пытаемся взять количество бойцов из data-f-hero.
+      - Если data-f-hero нет или оно битое — заходим внутрь оффера
+        и ищем число бойцов в тексте страницы (бойцы/бравлеры/brawlers).
+      - Если даже так не нашли бойцов — оффер пропускаем.
+      - Запоминаем только новые офферы (по seen_offers).
     """
     html = fetch_page(BRAWL_ACCOUNTS_URL)
     soup = BeautifulSoup(html, "html.parser")
@@ -432,9 +433,9 @@ def collect_offers(state: dict) -> List[Offer]:
             continue
         data_s = price_div.get("data-s")
         if not data_s:
-            text = price_div.get_text(" ", strip=True).replace(",", ".")
+            text_price = price_div.get_text(" ", strip=True).replace(",", ".")
             price_val = None
-            for tok in text.split():
+            for tok in text_price.split():
                 try:
                     price_val = float(tok)
                     break
@@ -448,13 +449,27 @@ def collect_offers(state: dict) -> List[Offer]:
             except ValueError:
                 continue
 
-        # Кол-во бойцов только из data-f-hero
+        # 1) Пытаемся взять количество бойцов из data-f-hero
+        heroes_count: Optional[int] = None
         heroes_raw = a.get("data-f-hero")
-        if not heroes_raw:
-            continue
-        try:
-            heroes_count = int(heroes_raw)
-        except ValueError:
+        if heroes_raw:
+            try:
+                heroes_count = int(heroes_raw)
+            except ValueError:
+                heroes_count = None
+
+        # 2) Если data-f-hero нет или битое — идём внутрь оффера и ищем по тексту
+        if heroes_count is None:
+            try:
+                offer_html = fetch_page(offer_url)
+                heroes_from_html = extract_heroes_from_offer_html(offer_html)
+                heroes_count = heroes_from_html
+            except Exception as e:
+                print(f"[WARN] Не удалось получить бойцов из оффера {offer_id}: {e}")
+                heroes_count = None
+
+        # если так и не нашли количество бойцов — этот оффер пропускаем
+        if heroes_count is None:
             continue
 
         # Кубки из data-f-cup, если есть
@@ -556,19 +571,15 @@ def calculate_value_label(price: float, price_min: float, price_max: float) -> O
 def filter_profitable_offers(offers: List[Offer]) -> List[Offer]:
     """
     Фильтрация офферов по количеству бойцов, цене и кубкам.
-
-    Логика:
-      - если heroes отсутствует или < 70 или > 130 — оффер не рассматриваем (get_price_range_for_heroes вернёт None);
-      - по heroes выбираем базовый ценовой диапазон (min, max);
-      - глобальный нижний порог цены: >= 200 ₽;
-      - жёсткий нижний порог по диапазону: price_rub >= price_min;
-      - мягкий верхний порог: price_rub <= price_max + 40;
-      - дополнительный фильтр: cups (кубки) >= 10000, если известны.
+    ...
     """
     profitable: List[Offer] = []
 
+    # логируем, сколько офферов пришло на вход фильтра
+    print(f"[DEBUG] Перед фильтром выгодности офферов: {len(offers)}")
+
     GLOBAL_MIN_PRICE = 200.0
-    EXTRA_ABOVE_MAX = 40.0
+    EXTRA_ABOVE_MAX = 100.0
     MIN_CUPS = 10000
 
     for offer in offers:
