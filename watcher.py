@@ -445,14 +445,135 @@ def is_description_forbidden(html: str) -> bool:
 
 # ===== 6. Сбор офферов (с пропуском уже просмотренных) =====
 
-        # Количество бравлеров из data-f-hero (обязательное поле)
+def collect_offers(state: dict) -> List[Offer]:
+    """
+    Загружаем страницу со всеми аккаунтами Brawl Stars и парсим офферы.
+
+    Логика:
+      - Сначала пытаемся взять количество бойцов из data-f-hero.
+      - Если data-f-hero нет или оно битое — пробуем вытащить из названия карточки.
+      - Если в названии нет — заходим внутрь оффера и ищем число бойцов
+        в тексте страницы (бойцы/бравлеры/brawlers).
+      - Если даже так не нашли бойцов — оффер пропускаем.
+      - Запоминаем только новые офферы (по seen_offers).
+    """
+    html = fetch_page(BRAWL_ACCOUNTS_URL)
+    soup = BeautifulSoup(html, "html.parser")
+
+    offers: List[Offer] = []
+    seen_offers: Dict[str, bool] = state.setdefault("seen_offers", {})
+
+    for a in soup.find_all("a", class_="tc-item"):
+        href = a.get("href")
+        if not href:
+            continue
+
+        # Полный URL оффера
+        if href.startswith("http"):
+            offer_url = href
+        else:
+            offer_url = BASE_URL.rstrip("/") + "/" + href.lstrip("/")
+
+        # ID оффера из параметра ?id=...
+        offer_id = None
+        if "offer?id=" in offer_url:
+            part = offer_url.split("offer?id=", 1)[-1]
+            part = part.split("&", 1)[0]
+            offer_id = part.strip()
+        if not offer_id:
+            continue
+
+        # уже видели — пропускаем
+        if seen_offers.get(offer_id):
+            continue
+
+        # Цена
+        price_div = a.find("div", class_="tc-price")
+        if not price_div:
+            continue
+        data_s = price_div.get("data-s")
+        if not data_s:
+            text_price = price_div.get_text(" ", strip=True).replace(",", ".")
+            price_val = None
+            for tok in text_price.split():
+                try:
+                    price_val = float(tok)
+                    break
+                except ValueError:
+                    continue
+            if price_val is None:
+                continue
+        else:
+            try:
+                price_val = float(data_s.replace(",", "."))
+            except ValueError:
+                continue
+
+        # Краткое описание (для скинов и, при желании, для резервного поиска бойцов)
+        desc_div = a.find("div", class_="tc-desc-text")
+        title = desc_div.get_text(" ", strip=True) if desc_div else ""
+
+        # Ник продавца
+        seller_div = a.find("div", class_="media-user-name")
+        seller_name = seller_div.get_text(" ", strip=True) if seller_div else ""
+
+        # 1) Пытаемся взять количество бойцов из data-f-hero
+        heroes_count: Optional[int] = None
         heroes_raw = a.get("data-f-hero")
-        if not heroes_raw:
+        if heroes_raw:
+            try:
+                heroes_count = int(heroes_raw)
+            except ValueError:
+                heroes_count = None
+
+        # 2) Если data-f-hero нет или битое — пытаемся достать из названия карточки
+        if heroes_count is None and title:
+            heroes_from_title = extract_heroes_from_text(title)
+            if heroes_from_title is not None:
+                heroes_count = heroes_from_title
+
+        # 3) Если в названии тоже не нашли — идём внутрь оффера и ищем по полному описанию
+        if heroes_count is None:
+            try:
+                offer_html = fetch_page(offer_url)
+                heroes_from_html = extract_heroes_from_text(
+                    BeautifulSoup(offer_html, "html.parser").get_text(" ", strip=True)
+                )
+                heroes_count = heroes_from_html
+            except Exception as e:
+                print(f"[WARN] Не удалось получить бойцов из оффера {offer_id}: {e}")
+                heroes_count = None
+
+        # если так и не нашли количество бойцов — этот оффер пропускаем
+        if heroes_count is None:
             continue
-        try:
-            heroes_count = int(heroes_raw)
-        except ValueError:
-            continue
+
+        # Кубки из data-f-cup, если есть
+        cups_raw = a.get("data-f-cup")
+        cups_count: Optional[int] = None
+        if cups_raw:
+            try:
+                cups_count = int(cups_raw)
+            except ValueError:
+                cups_count = None
+
+        offer = Offer(
+            offer_id=offer_id,
+            url=offer_url,
+            price_rub=price_val,
+            heroes=heroes_count,
+            cups=cups_count,
+            title=title,
+            seller_name=seller_name,
+        )
+        offers.append(offer)
+
+        # помечаем как просмотренный
+        seen_offers[offer_id] = True
+
+    save_state(state)
+    print(f"[INFO] На странице Brawl Stars найдено офферов (новых): {len(offers)}")
+    return offers
 
 
 # ===== 7. Выгодность по бойцам и цене =====
