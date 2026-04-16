@@ -19,6 +19,41 @@ from typing import Optional, List, Dict
 
 import requests
 from bs4 import BeautifulSoup
+import re
+
+
+def extract_heroes_from_text(text: str) -> Optional[int]:
+    """
+    Пытаемся вытащить количество бойцов/бравлеров из произвольного текста.
+    Ловим варианты:
+      - "бойцов 85", "бравлеров: 85", "brawlers - 85"
+      - "85 бойцов", "85 бравлеров", "85 brawlers"
+    """
+    if not text:
+        return None
+
+    t = text.lower()
+
+    # 1) Слово перед числом: "бойцов 85", "brawlers: 85"
+    pattern_word_num = r"(бойц\w*|бравлер\w*|brawler\w*)[:\s\-]+(\d{1,3})"
+    m = re.search(pattern_word_num, t, flags=re.IGNORECASE)
+    if m:
+        try:
+            return int(m.group(2))
+        except ValueError:
+            pass
+
+    # 2) Число перед словом: "85 бойцов", "85 brawlers"
+    pattern_num_word = r"(\d{1,3})[:\s\-]+(бойц\w*|бравлер\w*|brawler\w*)"
+    m = re.search(pattern_num_word, t, flags=re.IGNORECASE)
+    if m:
+        try:
+            return int(m.group(1))
+        except ValueError:
+            pass
+
+    return None
+
 
 # ===== 0. Ключевые скины и надбавки к цене =====
 
@@ -306,31 +341,12 @@ class Offer:
 def extract_heroes_from_offer_html(html: str) -> Optional[int]:
     """
     Пытаемся вытащить количество бойцов из страницы конкретного оффера.
-    На странице есть блоки вида:
-      "👤 Бойцов: 14<br />"
-    или просто "Бойцов: 14" / "Бравлеров: 14".
-
-    Берём первое найденное число после слов "Бойцов" или "Бравлеров".
+    Берём первое найденное число после слов "бойцы/бойцов/бравлеры/бравлеров/brawler/brawlers"
+    в любом месте текста.
     """
     soup = BeautifulSoup(html, "html.parser")
     text = soup.get_text(" ", strip=True)
-
-    import re
-
-    patterns = [
-        r"[Бб]ойцов[:\s]+(\d+)",
-        r"[Бб]равлеров[:\s]+(\d+)",
-    ]
-
-    for pattern in patterns:
-        m = re.search(pattern, text)
-        if m:
-            try:
-                return int(m.group(1))
-            except ValueError:
-                continue
-
-    return None
+    return extract_heroes_from_text(text)
 
 
 def is_description_forbidden(html: str) -> bool:
@@ -392,8 +408,9 @@ def collect_offers(state: dict) -> List[Offer]:
 
     Логика:
       - Сначала пытаемся взять количество бойцов из data-f-hero.
-      - Если data-f-hero нет или оно битое — заходим внутрь оффера
-        и ищем число бойцов в тексте страницы (бойцы/бравлеры/brawlers).
+      - Если data-f-hero нет или оно битое — пробуем вытащить из названия карточки.
+      - Если в названии нет — заходим внутрь оффера и ищем число бойцов
+        в тексте страницы (бойцы/бравлеры/brawlers).
       - Если даже так не нашли бойцов — оффер пропускаем.
       - Запоминаем только новые офферы (по seen_offers).
     """
@@ -449,6 +466,14 @@ def collect_offers(state: dict) -> List[Offer]:
             except ValueError:
                 continue
 
+        # Краткое описание (нужно раньше, потому что будем по нему тоже искать бойцов)
+        desc_div = a.find("div", class_="tc-desc-text")
+        title = desc_div.get_text(" ", strip=True) if desc_div else ""
+
+        # Ник продавца
+        seller_div = a.find("div", class_="media-user-name")
+        seller_name = seller_div.get_text(" ", strip=True) if seller_div else ""
+
         # 1) Пытаемся взять количество бойцов из data-f-hero
         heroes_count: Optional[int] = None
         heroes_raw = a.get("data-f-hero")
@@ -458,7 +483,13 @@ def collect_offers(state: dict) -> List[Offer]:
             except ValueError:
                 heroes_count = None
 
-        # 2) Если data-f-hero нет или битое — идём внутрь оффера и ищем по тексту
+        # 2) Если data-f-hero нет или битое — пытаемся достать из названия карточки
+        if heroes_count is None and title:
+            heroes_from_title = extract_heroes_from_text(title)
+            if heroes_from_title is not None:
+                heroes_count = heroes_from_title
+
+        # 3) Если в названии тоже не нашли — идём внутрь оффера и ищем по полному описанию
         if heroes_count is None:
             try:
                 offer_html = fetch_page(offer_url)
@@ -480,14 +511,6 @@ def collect_offers(state: dict) -> List[Offer]:
                 cups_count = int(cups_raw)
             except ValueError:
                 cups_count = None
-
-        # Краткое описание
-        desc_div = a.find("div", class_="tc-desc-text")
-        title = desc_div.get_text(" ", strip=True) if desc_div else ""
-
-        # Ник продавца
-        seller_div = a.find("div", class_="media-user-name")
-        seller_name = seller_div.get_text(" ", strip=True) if seller_div else ""
 
         offer = Offer(
             offer_id=offer_id,
