@@ -1,6 +1,8 @@
 # watcher.py
+#
 # Воркер для Railway:
 #   Procfile: worker: python watcher.py
+#
 # Логика:
 #   - каждые N минут заходим на страницу аккаунтов Brawl Stars на FunPay
 #   - парсим список офферов (ссылки, цена, количество бойцов)
@@ -185,15 +187,16 @@ def bonus_for_skins(text: str) -> float:
             total += SKIN_BONUSES.get(skin_name, 0)
     return total
 
+CONFIG_PATH = "config.json"
 STATE_PATH = "state.json"
 
-# ===== 1. Загрузка конфигурации только из переменной окружения CONFIG_JSON =====
+# ===== 1. Загрузка конфигурации =====
 
-config_raw = os.getenv("CONFIG_JSON")
-if not config_raw:
-    raise RuntimeError("CONFIG_JSON не задан или пуст. Задай переменную окружения CONFIG_JSON с валидным JSON.")
-
-config = json.loads(config_raw)
+if os.getenv("CONFIG_JSON"):
+    config = json.loads(os.getenv("CONFIG_JSON"))
+else:
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        config = json.load(f)
 
 TELEGRAM_BOT_TOKEN: str = config["telegram_bot_token"]
 TELEGRAM_CHAT_ID: str = config["telegram_chat_id"]
@@ -206,9 +209,6 @@ BRAWL_ACCOUNTS_URL: str = config.get(
 )
 
 MAX_SIGNALS_PER_DAY: int = int(config.get("max_signals_per_day", 100))
-
-QUIET_HOURS_START: int = int(config.get("quiet_hours_start", 1))
-QUIET_HOURS_END: int = int(config.get("quiet_hours_end", 7))
 
 
 def skins_bonus_breakdown(text: str) -> list[tuple[str, float]]:
@@ -495,39 +495,32 @@ def collect_offers(state: dict) -> List[Offer]:
 
 # ===== 7. Выгодность по бойцам и цене =====
 
-def get_max_price_for_heroes(heroes: int) -> Optional[float]:
+def get_price_range_for_heroes(heroes: int) -> Optional[tuple[float, float]]:
     """
-    Возвращает максимальную допустимую цену для заданного количества бойцов
-    по таблице:
-      от 45 бойцов - 100
-      от 60 бойцов - 180
-      от 70 бойцов - 300
-      от 80 бойцов - 420
-      от 85 бойцов - 450
-      от 90 бойцов - 650
-      от 95 бойцов - 700
-      от 100 бойцов - 1000
+    Возвращает (min_price, max_price) для заданного количества бойцов.
+    Диапазоны по ТЗ:
 
-    Если бойцов меньше 45 — оффер не интересен (вернём None).
+      70–79    -> 100–300
+      80–84    -> 100–420
+      85–89    -> 100–450
+      90–94    -> 100–650
+      95–99    -> 100–700
+      >= 100   -> 100–1000
+
+    Если heroes < 70 — возвращаем None (оффер нами не интересен).
     """
-    if heroes < 45:
-        return None
-    if heroes >= 100:
-        return 1000.0
-    if heroes >= 95:
-        return 700.0
-    if heroes >= 90:
-        return 650.0
-    if heroes >= 85:
-        return 450.0
-    if heroes >= 80:
-        return 420.0
-    if heroes >= 70:
-        return 300.0
-    if heroes >= 60:
-        return 180.0
-    if heroes >= 45:
-        return 100.0
+    if 70 <= heroes <= 79:
+        return 100.0, 300.0
+    if 80 <= heroes <= 84:
+        return 100.0, 420.0
+    if 85 <= heroes <= 89:
+        return 100.0, 450.0
+    if 90 <= heroes <= 94:
+        return 100.0, 650.0
+    if 95 <= heroes <= 99:
+        return 100.0, 700.0
+    if 100 <= heroes <= 120:
+        return 100.0, 1000.0
     return None
 
 
@@ -565,14 +558,17 @@ def filter_profitable_offers(offers: List[Offer]) -> List[Offer]:
     Фильтрация офферов по количеству бойцов, цене и кубкам.
 
     Логика:
-      - если heroes отсутствует или < 45 — оффер не рассматриваем;
-      - по heroes берём базовый максимум цены (get_max_price_for_heroes);
-      - для 45–59 и 60–69 бойцов: жёсткий потолок (100 и 180, без +40);
-      - для 70+ бойцов: мягкий потолок = базовый максимум + 40;
-      - по кубкам: если известны и < 10000 — отбрасываем.
+      - если heroes отсутствует или < 70 или > 130 — оффер не рассматриваем (get_price_range_for_heroes вернёт None);
+      - по heroes выбираем базовый ценовой диапазон (min, max);
+      - глобальный нижний порог цены: >= 200 ₽;
+      - жёсткий нижний порог по диапазону: price_rub >= price_min;
+      - мягкий верхний порог: price_rub <= price_max + 40;
+      - дополнительный фильтр: cups (кубки) >= 10000, если известны.
     """
     profitable: List[Offer] = []
 
+    GLOBAL_MIN_PRICE = 200.0
+    EXTRA_ABOVE_MAX = 40.0
     MIN_CUPS = 10000
 
     for offer in offers:
@@ -582,20 +578,19 @@ def filter_profitable_offers(offers: List[Offer]) -> List[Offer]:
         heroes = offer.heroes
         price = offer.price_rub
 
-        # базовый максимум по таблице
-        base_max_price = get_max_price_for_heroes(heroes)
-        if base_max_price is None:
+        # глобальный минимум цены
+        if price < GLOBAL_MIN_PRICE:
             continue
 
-        # для 45–59 и 60–69: жёсткий потолок (100, 180)
-        # для 70+ : разрешаем +40 к базовому максимуму
-        if heroes >= 70:
-            allowed_max_price = base_max_price + 40.0
-        else:
-            allowed_max_price = base_max_price
+        rng = get_price_range_for_heroes(heroes)
+        if rng is None:
+            continue
 
-        # цена выше разрешённого потолка — отбрасываем
-        if price > allowed_max_price:
+        price_min, price_max = rng
+        soft_max = price_max + EXTRA_ABOVE_MAX
+
+        # отсекаем и ниже диапазона, и сильно выше
+        if price < price_min or price > soft_max:
             continue
 
         # фильтр по кубкам: если знаем кубки и их меньше минимума — отбрасываем
@@ -741,32 +736,6 @@ def send_new_offers_to_telegram(offers: List[Offer], state: dict) -> None:
             print(f"[ERROR] Не удалось отправить сообщение в Telegram: {e}")
 
 
-from datetime import datetime
-
-
-def is_quiet_time() -> bool:
-    """
-    Возвращает True, если сейчас время в диапазоне тихих часов.
-    Интервал задаётся в часах [QUIET_HOURS_START, QUIET_HOURS_END) по времени сервера.
-    Поддерживает и случай, когда интервал "через полночь", например 23–6.
-    """
-    now_hour = datetime.now().hour
-
-    start = QUIET_HOURS_START
-    end = QUIET_HOURS_END
-
-    if start == end:
-        # одинаковые значения — считаем, что тихих часов нет
-        return False
-
-    if start < end:
-        # обычный случай: например 1–7
-        return start <= now_hour < end
-    else:
-        # через полночь: например 23–6
-        return now_hour >= start or now_hour < end
-
-
 # ===== 9. Основной цикл =====
 
 def run_single_iteration() -> None:
@@ -797,9 +766,8 @@ def run_single_iteration() -> None:
 def main_loop() -> None:
     """
     Бесконечный цикл для Railway.
-    Теперь:
-      - если сейчас тихие часы (например 01:00–07:00) — не парсим, просто спим подольше;
-      - иначе запускаем обычную итерацию с коротким интервалом.
+    Теперь проверяем сайт примерно раз в секунду
+    с небольшим рандомом (от 1.0 до 2.0 секунд между запросами).
     """
     print(
         "[INFO] Старт главного цикла. "
@@ -808,13 +776,7 @@ def main_loop() -> None:
 
     while True:
         try:
-            if is_quiet_time():
-                print("[INFO] Тихие часы, парсинг отключен. Спим 300 секунд...")
-                time.sleep(300)  # 5 минут
-                continue
-
             run_single_iteration()
-
         except Exception as e:
             print(f"[FATAL] Необработанное исключение в итерации: {e}")
 
